@@ -13,7 +13,8 @@ use engage::{
 };
 
 use mapunitcommand::{ MapUnitCommandMenu
-    // , TradeMenuItem
+    , TradeMenuItem
+    , EngageSummonMenuItem
 };
 
 use skyline::{ install_hook, patching::Patch, };
@@ -29,6 +30,61 @@ const REENGAGE_MIND_TYPE: u32 = 0x39;
 
 impl Bindable for MapSequence { }
 impl Bindable for MapSequenceHuman2 { }
+
+#[unity::class("App", "MapBattleInfoRoot")]
+pub struct MapBattleInfoRoot {
+    sup: [u8;0x10],
+    command_root: &'static (),
+    command_sub_root: &'static (),
+    command_text: &'static (),
+    command_sub_text: &'static (),
+    info_left: &'static (),
+    info_right: &'static (),
+}
+
+#[unity::class("App", "MapSituation")]
+pub struct MapSituation {
+    sup: [u8;0x10],
+    status: &'static (),
+    players: &'static (),
+    groups: &'static (),
+    current_force_type: i32,    
+}
+
+impl MapSituation {
+    pub fn get_target_unit(&self,  forcetype: i32)  -> i32 {
+        unsafe { mapsituation_get_player(self, forcetype, None) }
+    }
+}
+
+#[unity::class("App", "MapCursor")]
+pub struct MapCursor {
+    sup: [u8;0x10],
+    pos_x: f32,
+    pos_y: f32,
+    pos_z: f32,
+}
+
+#[repr(C)]
+#[unity::class("App", "MapSequence")]
+pub struct MapSequence {
+    pub descs: &'static mut Il2CppArray<&'static mut ProcDesc>,
+    pub desc_index: i32,
+    pub name: Option<&'static Il2CppString>,
+    /// Unique ID derived from the name of the ProcInst.
+    pub hashcode: i32,
+    /// The ProcInst this instance is attached to
+    pub parent: &'static mut ProcInst,
+    /// The next ProcInst to process. ProcInsts are processed from child to parent.
+    pub child: *mut MapSequenceHuman2,
+}
+
+#[repr(C)]
+#[unity::class("App", "MapSequenceHuman")]
+pub struct MapSequenceHuman2 {
+    pub descs: &'static mut Il2CppArray<&'static mut ProcDesc>,
+    pub desc_index: i32,
+}
 
 /// A structure representing a call to a method that returns nothing.
 #[repr(C)]
@@ -64,6 +120,28 @@ impl<T: Bindable> ProcVoidMethodMut<T> {
     }
 }
 
+// #[unity::class("App", "MapBattleInfoParamSetter")]
+// pub struct MapBattleInfoParamSetter { }
+// impl MapBattleInfoParamSetter {
+//     pub fn set_battle_info_for_trade(&self) {
+//         unsafe { mapbattleinfoparamsetter_setbattleinfofortrade(self, None) }
+//     }
+//     pub fn set_battle_info_for_no_param(&self, isweapon: bool, isgodname: bool) {
+//         unsafe { mapbattleinfoparamsetter_setbattleinfofornoparam(self, isweapon, isgodname, None) }
+//     }
+// }
+// #[unity::class("App", "SortieTradeItemMenuItem")]
+// pub struct SortieTradeItemMenuItem {
+//     sup: BasicMenuItemFields,
+//     unit: Option<&'static mut Unit>,
+//     receiver_unit: Option<&'static mut Unit>,
+//     item_index: i32,
+//     default_select: bool,
+//     selectable_blank: bool,
+//     enabled_to_select_blank: bool,
+//     disabled: bool,
+// }
+
 #[unity::class("App", "InfoUtil")]
 pub struct InfoUtil { }
 
@@ -76,60 +154,6 @@ impl InfoUtil {
 #[unity::from_offset("App", "InfoUtil", "TrySetText")]
 fn infoutil_trysettext(tmp: &(), str: &'static Il2CppString, method_info: OptionalMethod);
 
-
-pub struct MapBattleInfoRoot {
-    sup: [u8;0x10],
-    command_root: &'static (),
-    command_sub_root: &'static (),
-    command_text: &'static (),
-    command_sub_text: &'static (),
-    info_left: &'static (),
-    info_right: &'static (),
-}
-
-#[unity::class("App", "MapCursor")]
-pub struct MapCursor {
-    sup: [u8;0x10],
-    pos_x: f32,
-    pos_y: f32,
-    pos_z: f32,
-}
-
-#[repr(C)]
-#[unity::class("App", "MapSequence")]
-pub struct MapSequence {
-    pub descs: &'static mut Il2CppArray<&'static mut ProcDesc>,
-    pub desc_index: i32,
-    pub name: Option<&'static Il2CppString>,
-    /// Unique ID derived from the name of the ProcInst.
-    pub hashcode: i32,
-    /// The ProcInst this instance is attached to
-    pub parent: &'static mut ProcInst,
-    /// The next ProcInst to process. ProcInsts are processed from child to parent.
-    pub child: *mut MapSequenceHuman2,
-}
-
-#[repr(C)]
-#[unity::class("App", "MapSequenceHuman")]
-pub struct MapSequenceHuman2 {
-    pub descs: &'static mut Il2CppArray<&'static mut ProcDesc>,
-    pub desc_index: i32,
-}
-
-#[unity::class("App", "MapSituation")]
-pub struct MapSituation {
-    sup: [u8;0x10],
-    status: &'static (),
-    players: &'static (),
-    groups: &'static (),
-    current_force_type: i32,    
-}
-
-impl MapSituation{
-    pub fn get_target_unit(&self,  forcetype: i32)  -> i32 {
-        unsafe { mapsituation_get_player(self, forcetype, None) }
-    }
-}
 
 static DISENGAGE_CLASS: OnceLock<&'static mut Il2CppClass> = OnceLock::new();
 
@@ -173,6 +197,7 @@ pub fn main() {
     skyline::install_hooks!(
         mapunitcommandmenu_createbind,
         maptarget_enumerate,
+        mapsequencetargetselect_decide_normal,
         mapbattleinforoot_setcommandtext,
         mapsequencehuman_createbind,
     );
@@ -186,6 +211,8 @@ pub fn main() {
 // pushes whatever was already there forward, and also makes later additions simpler.
 #[skyline::hook(offset = 0x2677780)]
 pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _method_info: OptionalMethod) {
+    println!("[mapsequencehuman_createbind] BEG");
+
     call_original!(sup, is_resume, _method_info);
 
     let mut vec = unsafe { (*(sup.child)).descs.to_vec() };
@@ -214,11 +241,13 @@ pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _meth
     vec.insert(0x9a, desc);
 
     // WHERE DOES 53 come from???
-    let steal_label = ProcDesc::label(53);
-    vec.insert(0x9a, steal_label);
+    let disengage_label = ProcDesc::label(53);
+    vec.insert(0x9a, disengage_label);
 
     let new_descs = Il2CppArray::from_slice(vec).unwrap();
     unsafe { (*sup.child).descs = new_descs };
+
+    println!("[mapsequencehuman_createbind] END");
 }
 
 // Make "Steal" appear on the preview when highlighting an enemy to steal from.
@@ -226,6 +255,7 @@ pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _meth
 // when highlighting an enemy.
 #[unity::hook("App", "MapBattleInfoRoot", "SetCommandText")]
 pub fn mapbattleinforoot_setcommandtext(this: &mut MapBattleInfoRoot, mind_type: i32, _method_info: OptionalMethod) {
+    println!("[mapbattleinforoot_setcommandtext/BEG]");
     if DISENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
         InfoUtil::try_set_text(&this.command_text, "Disengage");
     } else if REENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
@@ -233,6 +263,7 @@ pub fn mapbattleinforoot_setcommandtext(this: &mut MapBattleInfoRoot, mind_type:
     } else {
         call_original!(this, mind_type, _method_info);
     }
+    println!("[mapbattleinforoot_setcommandtext/END]");
 }
 
 // This is a generic function that essentially checks the Mind value, and then calls
@@ -242,37 +273,59 @@ pub fn mapbattleinforoot_setcommandtext(this: &mut MapBattleInfoRoot, mind_type:
 #[unity::hook("App", "MapTarget", "Enumerate")]
 pub fn maptarget_enumerate(this: &mut MapTarget, mask: i32, _method_info: OptionalMethod) {
     println!("[maptarget_enumerate] BEG: {}", this.m_mind);
-    match this.m_mind {
-        DISENGAGE_MIND_TYPE => {
-            this.m_action_mask = mask as u32;
-            if let Some(unit) = this.unit {
-                if this.x < 0 {
-                    this.x = unit.x as i8;
-                }
-                if this.z < 0 {
-                    this.z = unit.z as i8;
-                }
-            }
-            if let Some(dataset) = this.m_dataset.as_mut() {
-                dataset.clear();
-            }
+    // match this.m_mind {
+    if this.m_mind == DISENGAGE_MIND_TYPE {
+        println!("[maptarget_enumerate] disengage");
 
-            this.enumerate_disengage();
-
-            if let Some(dataset) = this.m_dataset.as_mut() {
-                dataset.m_list
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(count_var, data_item)| {
-                        data_item.m_index = count_var as i8;    
-                    });
+        this.m_action_mask = mask as u32;
+        if let Some(unit) = this.unit {
+            if this.x < 0 {
+                this.x = unit.x as i8;
             }
-    
-        }, REENGAGE_MIND_TYPE => {
-            // Stuff
-        }, _ => {
-            call_original!(this, mask, _method_info);
+            if this.z < 0 {
+                this.z = unit.z as i8;
+            }
         }
+        if let Some(dataset) = this.m_dataset.as_mut() {
+            dataset.clear();
+        }
+
+        this.enumerate_disengage();
+
+        if let Some(dataset) = this.m_dataset.as_mut() {
+            dataset.m_list
+                .iter_mut()
+                .enumerate()
+                .for_each(|(count_var, data_item)| {
+                    data_item.m_index = count_var as i8;    
+                });
+        }
+    } else if this.m_mind == REENGAGE_MIND_TYPE {
+        println!("[maptarget_enumerate] reengage");
+        // this.m_action_mask = mask as u32;
+        // if let Some(unit) = this.unit {
+        //     if this.x < 0 {
+        //         this.x = unit.x as i8;
+        //     }
+        //     if this.z < 0 {
+        //         this.z = unit.z as i8;
+        //     }
+        // }
+        // if let Some(dataset) = this.m_dataset.as_mut() {
+        //     dataset.clear();
+        // }
+        // this.enumerate_reengage();
+        // if let Some(dataset) = this.m_dataset.as_mut() {
+        //     dataset.m_list
+        //         .iter_mut()
+        //         .enumerate()
+        //         .for_each(|(count_var, data_item)| {
+        //             data_item.m_index = count_var as i8;    
+        //         });
+        // }
+    } else {
+        println!("[maptarget_enumerate] mind: {}", this.m_mind);
+        call_original!(this, mask, _method_info);
     }
     println!("[maptarget_enumerate] END");
 }
@@ -285,64 +338,106 @@ pub fn mapunitcommandmenu_createbind(sup: &mut ProcInst, _method_info: OptionalM
     let maptarget_instance = get_instance::<MapTarget>();
     let cur_mind = maptarget_instance.m_mind;
 
-    // 0x7101e518f0
-    // void App.MapUnitCommandMenu.TradeMenuItem$$.ctor(App_MapUnitCommandMenu_TradeMenuItem_o *__this,MethodInfo *method)
+    println!("[mapunitcommandmenu_createbind] cur_mind: {}", cur_mind);
+
+    //// 0x7101e518f0
+    //// void App.MapUnitCommandMenu.TradeMenuItem$$.ctor(App_MapUnitCommandMenu_TradeMenuItem_o *__this,MethodInfo *method)
     //// Create a new class using TradeMenuItem as reference so that we do not wreck the original command for ours.
-    // let disengage = DISENGAGE_CLASS.get_or_init(|| {
-    //     // TradeMenuItem is a nested class inside of MapUnitCommandMenu, so we need to dig for it.
-    //     let menu_class  = *MapUnitCommandMenu::class()
-    //         .get_nested_types()
-    //         .iter()
-    //         .find(|class| class.get_name().contains("TradeMenuItem"))
-    //         .unwrap();
-    //     let new_class = menu_class.clone();
-    //     new_class
-    //         .get_virtual_method_mut("GetName")
-    //         .map(|method| method.method_ptr = disengage_get_name as _)
-    //         .unwrap();
-    //     new_class
-    //         .get_virtual_method_mut("GetCommandHelp")
-    //         .map(|method| method.method_ptr = disengage_get_desc as _)
-    //         .unwrap();
-    //     new_class
-    //         .get_virtual_method_mut("get_Mind")
-    //         .map(|method| method.method_ptr = disengage_get_mind as _)
-    //         .unwrap();
-    //     new_class
-    //         .get_virtual_method_mut("get_FlagID")
-    //         .map(|method| method.method_ptr = disengage_get_flagid as _)
-    //         .unwrap();
-    //     new_class
-    // });
+    // Create a new class using EngageSummonMenuItem as reference so that we do not wreck the original command for ours.
+    let disengage = DISENGAGE_CLASS.get_or_init(|| {
+        // EngageSummonMenuItem is a nested class inside of MapUnitCommandMenu, so we need to dig for it.
+        let menu_class  = *MapUnitCommandMenu::class()
+            .get_nested_types()
+            .iter()
+
+            // .find(|class| class.get_name().contains("EngageSummonMenuItem"))
+            ////////////////////////////////////
+            .find(|class| class.get_name().contains("TradeMenuItem"))
+
+            .unwrap();
+        let new_class = menu_class.clone();
+        new_class
+            .get_virtual_method_mut("GetName")
+            .map(|method| method.method_ptr = disengage_get_name as _)
+            .unwrap();
+        new_class
+            .get_virtual_method_mut("GetCommandHelp")
+            .map(|method| method.method_ptr = disengage_get_desc as _)
+            .unwrap();
+        new_class
+            .get_virtual_method_mut("get_Mind")
+            .map(|method| method.method_ptr = disengage_get_mind as _)
+            .unwrap();
+        new_class
+             .get_virtual_method_mut("get_FlagID")
+             .map(|method| method.method_ptr = disengage_get_flagid as _)
+             .unwrap();
+        new_class
+    });
 
     call_original!(sup, _method_info);
     
-    // Instantiate our custom class as if it was TradeMenuItem
-    // let instance = Il2CppObject::<TradeMenuItem>::from_class(disengage).unwrap();
-    
-    // let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<TradeMenuItem>>().full_menu_item_list;
-    // menu_item_list.insert((menu_item_list.len() - 1) as i32, instance);
-    
+    // Instantiate our custom class as if it was EngageSummonMenuItem
+    // let instance = Il2CppObject::<EngageSummonMenuItem>::from_class(disengage).unwrap();
+    // let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<EngageSummonMenuItem>>().full_menu_item_list;
+    ////////////////////////////////////
+    let instance = Il2CppObject::<TradeMenuItem>::from_class(disengage).unwrap();
+    let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<TradeMenuItem>>().full_menu_item_list;
+
+    menu_item_list.insert((menu_item_list.len() - 1) as i32, instance);
+
     println!("[mapunitcommandmenu_createbind] END");
 }
 
-// pub extern "C" fn steal_get_name(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString {
-//     "Steal".into()
-// }
+// This is the function that usually runs when you press A while highlighting a target and the
+// forecast windows are up.
+#[unity::hook("App", "MapSequenceTargetSelect", "DecideNormal")]
+pub fn mapsequencetargetselect_decide_normal(this: &mut MapSequenceTargetSelect, _method_info: OptionalMethod) {
+    println!("[mapsequencetargetselect_decide_normal] BEG");
 
-// pub extern "C" fn steal_get_desc(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString {
-//     "Take items from an enemy.".into()
-// }
+    let maptarget_instance = get_instance::<MapTarget>();
+    let cur_mind = maptarget_instance.m_mind;
+    if cur_mind == 0x38 {
+        println!("[mapsequencetargetselect_decide_normal] STEAL/DISENGAGE ({})", cur_mind);
+
+        let mapmind_instance = get_instance::<MapMind>();
+        let mut unit_index = 7;
+        if this.can_select_target() && this.target_data.is_some() {
+            unit_index = this.target_data.unwrap().m_unit.index;
+        }
+
+        mapmind_instance.set_trade_unit_index(unit_index as _);
+        
+        let mapsequencehuman_instance = get_singleton_proc_instance::<MapSequenceHuman>().unwrap();
+        // This is using the new label added in the mapsequencehuman_createbind.
+        // 0x35: 53
+        ProcInst::jump(mapsequencehuman_instance, 0x35);
+
+        GameSound::post_event("Decide", None);
+    } else {
+        println!("[mapsequencetargetselect_decide_normal] mind: {}", cur_mind);
+
+        call_original!(this, _method_info)
+    }
+
+    println!("[mapsequencetargetselect_decide_normal] END");
+}
+
+pub extern "C" fn disengage_get_name(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString { "Disengage".into() }
+
+pub extern "C" fn disengage_get_desc(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString {
+    "Summon equipped emblem to fight with you.".into()
+}
 
 // what does 0x38 mean??? Decimal: 56 binary: 0b111000
 // dump.cs: public enum MapMind.Type // TypeDefIndex: 12219
-// pub extern "C" fn steal_get_mind(_this: &(), _method_info: OptionalMethod) -> i32 {
-//     0x38
-// }
+pub extern "C" fn disengage_get_mind(_this: &(), _method_info: OptionalMethod) -> i32 {
+    DISENGAGE_MIND_TYPE.try_into().unwrap()
+}
 
-// pub extern "C" fn steal_get_flagid(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString {
-//     "Steal".into()
-// }
+pub extern "C" fn disengage_get_flagid(_this: &(), _method_info: OptionalMethod) -> &'static Il2CppString {
+    "EmblemSummon".into()
+}
 
 // Functions for the ProcDesc fuckening
 #[unity::from_offset("App", "MapSequenceHuman", "UnitMenuPrepare")]

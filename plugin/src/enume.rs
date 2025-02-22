@@ -45,7 +45,7 @@ use unity::{
         return;
       }
   
-      if !cur_unit.has_sid("SID_Steal".into()) {
+      if !cur_unit.has_sid("SID_Breakup".into()) {
         return;
       }
     
@@ -76,13 +76,13 @@ use unity::{
         println!("Terrain Data is not a valid target");
         return;
       }
+
+      // public const Force.Type Empty = 7;
       // Check if the current unit is a player, enemy or ally
       let force_type1 = if cur_unit.force.unwrap().force_type < ForceType::Absent as i32 {
         // Only keep the lowest 5 bits
         cur_unit.force.unwrap().force_type & 0x1f
-      } else {
-        7
-      };
+      } else { 7 };
     
       if force_type1 < ForceType::Absent as i32 {
         println!("force is valid");

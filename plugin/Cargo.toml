@@ -10,11 +10,8 @@ titleid = "01006A800016E000" # Smash Ultimate
 [lib]
 crate-type = ["cdylib"]
 
-# cobapi = { git = "https://github.com/DivineDragonFanClub/cobapi" }
-
 [dependencies]
-cobapi = { git = "https://github.com/atarng/cobapi", branch = "remove_0.9.0_lock.a" }
-engage = { git = "https://github.com/atarng/engage" }
+engage = { git = "https://github.com/atarng/engage", branch = "emblem_commands" }
 skyline = { git = "https://github.com/ultimate-research/skyline-rs" }
 unity = { git = "https://github.com/DivineDragonFanClub/unity" }
 
