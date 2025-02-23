@@ -14,7 +14,7 @@ use engage::{
 
 use mapunitcommand::{ MapUnitCommandMenu
     , TradeMenuItem
-    , EngageSummonMenuItem
+    // , EngageSummonMenuItem
 };
 
 use skyline::{ install_hook, patching::Patch, };
@@ -203,67 +203,63 @@ pub fn main() {
     );
 }
 
-// This function is... interesting.  It essentially builds a BIG list of labels and functions to run.
-// The labels are a way for the game to jump around the list and then run a series of functions in a row.
-// This is essentially how the ENTIRE game functions to some degree.
-// What we're doing here is adding a new section of entries to the list specifically for the Steal command.
-// We insert the new function calls and labels in reverse order because adding something to an existing index
-// pushes whatever was already there forward, and also makes later additions simpler.
-#[skyline::hook(offset = 0x2677780)]
-pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _method_info: OptionalMethod) {
-    println!("[mapsequencehuman_createbind] BEG");
+// Create our new menu command for Disengage
+#[unity::hook("App", "MapUnitCommandMenu", "CreateBind")]
+pub fn mapunitcommandmenu_createbind(sup: &mut ProcInst, _method_info: OptionalMethod) {
+    println!("[mapunitcommandmenu_createbind] BEG");
 
-    call_original!(sup, is_resume, _method_info);
+    let maptarget_instance = get_instance::<MapTarget>();
+    let cur_mind = maptarget_instance.m_mind;
 
-    let mut vec = unsafe { (*(sup.child)).descs.to_vec() };
+    println!("[mapunitcommandmenu_createbind] cur_mind: {}", cur_mind);
 
-    let desc = engage::proc::desc::ProcDesc::jump(0x10);
-    vec.insert(0x9a, desc);
+    //// 0x7101e518f0
+    //// void App.MapUnitCommandMenu.TradeMenuItem$$.ctor(App_MapUnitCommandMenu_TradeMenuItem_o *__this,MethodInfo *method)
+    //// Create a new class using TradeMenuItem as reference so that we do not wreck the original command for ours.
+    // Create a new class using EngageSummonMenuItem as reference so that we do not wreck the original command for ours.
+    let disengage = DISENGAGE_CLASS.get_or_init(|| {
+        // EngageSummonMenuItem is a nested class inside of MapUnitCommandMenu, so we need to dig for it.
+        let menu_class  = *MapUnitCommandMenu::class()
+            .get_nested_types()
+            .iter()
 
-    let method = mapsequencehuman_postitemmenutrade::get_ref();
-    let method = unsafe { std::mem::transmute(method.method_ptr) };
-    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    vec.insert(0x9a, desc);
+            // .find(|class| class.get_name().contains("EngageSummonMenuItem"))
+            ////////////////////////////////////
+            .find(|class| class.get_name().contains("TradeMenuItem"))
 
-    let method = mapitemmenu_createbindtrade::get_ref();
-    let method = unsafe { std::mem::transmute(method.method_ptr) };
-    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    vec.insert(0x9a, desc);
+            .unwrap();
+        let new_class = menu_class.clone();
+        new_class
+            .get_virtual_method_mut("GetName")
+            .map(|method| method.method_ptr = disengage_get_name as _)
+            .unwrap();
+        new_class
+            .get_virtual_method_mut("GetCommandHelp")
+            .map(|method| method.method_ptr = disengage_get_desc as _)
+            .unwrap();
+        new_class
+            .get_virtual_method_mut("get_Mind")
+            .map(|method| method.method_ptr = disengage_get_mind as _)
+            .unwrap();
+        new_class
+             .get_virtual_method_mut("get_FlagID")
+             .map(|method| method.method_ptr = disengage_get_flagid as _)
+             .unwrap();
+        new_class
+    });
 
-    let method = mapsequencehuman_preitemmenutrade::get_ref();
-    let method = unsafe { std::mem::transmute(method.method_ptr) };
-    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    vec.insert(0x9a, desc);
+    call_original!(sup, _method_info);
+    
+    // Instantiate our custom class as if it was EngageSummonMenuItem
+    // let instance = Il2CppObject::<EngageSummonMenuItem>::from_class(disengage).unwrap();
+    // let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<EngageSummonMenuItem>>().full_menu_item_list;
+    ////////////////////////////////////
+    let instance = Il2CppObject::<TradeMenuItem>::from_class(disengage).unwrap();
+    let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<TradeMenuItem>>().full_menu_item_list;
 
-    let method = mapsequencehuman_unitmenuprepare::get_ref();
-    let method = unsafe { std::mem::transmute(method.method_ptr) };
-    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    vec.insert(0x9a, desc);
+    menu_item_list.insert((menu_item_list.len() - 1) as i32, instance);
 
-    // WHERE DOES 53 come from???
-    let disengage_label = ProcDesc::label(53);
-    vec.insert(0x9a, disengage_label);
-
-    let new_descs = Il2CppArray::from_slice(vec).unwrap();
-    unsafe { (*sup.child).descs = new_descs };
-
-    println!("[mapsequencehuman_createbind] END");
-}
-
-// Make "Steal" appear on the preview when highlighting an enemy to steal from.
-// This function is what sets the text that appears in between the two windows
-// when highlighting an enemy.
-#[unity::hook("App", "MapBattleInfoRoot", "SetCommandText")]
-pub fn mapbattleinforoot_setcommandtext(this: &mut MapBattleInfoRoot, mind_type: i32, _method_info: OptionalMethod) {
-    println!("[mapbattleinforoot_setcommandtext/BEG]");
-    if DISENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
-        InfoUtil::try_set_text(&this.command_text, "Disengage");
-    } else if REENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
-        InfoUtil::try_set_text(&this.command_text, "Reengage");
-    } else {
-        call_original!(this, mind_type, _method_info);
-    }
-    println!("[mapbattleinforoot_setcommandtext/END]");
+    println!("[mapunitcommandmenu_createbind] END");
 }
 
 // This is a generic function that essentially checks the Mind value, and then calls
@@ -330,63 +326,68 @@ pub fn maptarget_enumerate(this: &mut MapTarget, mask: i32, _method_info: Option
     println!("[maptarget_enumerate] END");
 }
 
-// Create our new menu command for Disengage
-#[unity::hook("App", "MapUnitCommandMenu", "CreateBind")]
-pub fn mapunitcommandmenu_createbind(sup: &mut ProcInst, _method_info: OptionalMethod) {
-    println!("[mapunitcommandmenu_createbind] BEG");
 
-    let maptarget_instance = get_instance::<MapTarget>();
-    let cur_mind = maptarget_instance.m_mind;
+// This function is... interesting.  It essentially builds a BIG list of labels and functions to run.
+// The labels are a way for the game to jump around the list and then run a series of functions in a row.
+// This is essentially how the ENTIRE game functions to some degree.
+// What we're doing here is adding a new section of entries to the list specifically for the Steal command.
+// We insert the new function calls and labels in reverse order because adding something to an existing index
+// pushes whatever was already there forward, and also makes later additions simpler.
+#[skyline::hook(offset = 0x2677780)]
+pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _method_info: OptionalMethod) {
+    println!("[mapsequencehuman_createbind] BEG");
 
-    println!("[mapunitcommandmenu_createbind] cur_mind: {}", cur_mind);
+    call_original!(sup, is_resume, _method_info);
 
-    //// 0x7101e518f0
-    //// void App.MapUnitCommandMenu.TradeMenuItem$$.ctor(App_MapUnitCommandMenu_TradeMenuItem_o *__this,MethodInfo *method)
-    //// Create a new class using TradeMenuItem as reference so that we do not wreck the original command for ours.
-    // Create a new class using EngageSummonMenuItem as reference so that we do not wreck the original command for ours.
-    let disengage = DISENGAGE_CLASS.get_or_init(|| {
-        // EngageSummonMenuItem is a nested class inside of MapUnitCommandMenu, so we need to dig for it.
-        let menu_class  = *MapUnitCommandMenu::class()
-            .get_nested_types()
-            .iter()
+    let mut vec = unsafe { (*(sup.child)).descs.to_vec() };
 
-            // .find(|class| class.get_name().contains("EngageSummonMenuItem"))
-            ////////////////////////////////////
-            .find(|class| class.get_name().contains("TradeMenuItem"))
+    let desc = engage::proc::desc::ProcDesc::jump(0x10);
+    vec.insert(0x9a, desc);
 
-            .unwrap();
-        let new_class = menu_class.clone();
-        new_class
-            .get_virtual_method_mut("GetName")
-            .map(|method| method.method_ptr = disengage_get_name as _)
-            .unwrap();
-        new_class
-            .get_virtual_method_mut("GetCommandHelp")
-            .map(|method| method.method_ptr = disengage_get_desc as _)
-            .unwrap();
-        new_class
-            .get_virtual_method_mut("get_Mind")
-            .map(|method| method.method_ptr = disengage_get_mind as _)
-            .unwrap();
-        new_class
-             .get_virtual_method_mut("get_FlagID")
-             .map(|method| method.method_ptr = disengage_get_flagid as _)
-             .unwrap();
-        new_class
-    });
+    let method = mapsequencehuman_postitemmenutrade::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
 
-    call_original!(sup, _method_info);
-    
-    // Instantiate our custom class as if it was EngageSummonMenuItem
-    // let instance = Il2CppObject::<EngageSummonMenuItem>::from_class(disengage).unwrap();
-    // let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<EngageSummonMenuItem>>().full_menu_item_list;
-    ////////////////////////////////////
-    let instance = Il2CppObject::<TradeMenuItem>::from_class(disengage).unwrap();
-    let menu_item_list = &mut sup.child.as_mut().unwrap().cast_mut::<BasicMenu<TradeMenuItem>>().full_menu_item_list;
+    let method = mapitemmenu_createbindtrade::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
 
-    menu_item_list.insert((menu_item_list.len() - 1) as i32, instance);
+    let method = mapsequencehuman_preitemmenutrade::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
 
-    println!("[mapunitcommandmenu_createbind] END");
+    let method = mapsequencehuman_unitmenuprepare::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
+
+    // WHERE DOES 53 come from???
+    let disengage_label = ProcDesc::label(53);
+    vec.insert(0x9a, disengage_label);
+
+    let new_descs = Il2CppArray::from_slice(vec).unwrap();
+    unsafe { (*sup.child).descs = new_descs };
+
+    println!("[mapsequencehuman_createbind] END");
+}
+
+// Make "Steal" appear on the preview when highlighting an enemy to steal from.
+// This function is what sets the text that appears in between the two windows
+// when highlighting an enemy.
+#[unity::hook("App", "MapBattleInfoRoot", "SetCommandText")]
+pub fn mapbattleinforoot_setcommandtext(this: &mut MapBattleInfoRoot, mind_type: i32, _method_info: OptionalMethod) {
+    println!("[mapbattleinforoot_setcommandtext/BEG]");
+    if DISENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
+        InfoUtil::try_set_text(&this.command_text, "Disengage");
+    } else if REENGAGE_MIND_TYPE == mind_type.try_into().unwrap() {
+        InfoUtil::try_set_text(&this.command_text, "Reengage");
+    } else {
+        call_original!(this, mind_type, _method_info);
+    }
+    println!("[mapbattleinforoot_setcommandtext/END]");
 }
 
 // This is the function that usually runs when you press A while highlighting a target and the
