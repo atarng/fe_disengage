@@ -1,0 +1,8 @@
+[MSID_Breakup]
+Disengage
+
+[MSID_H_Breakup]
+Summon Equipped Emblem
+
+[MSID_H_Breakup_CMD]
+Summon Equipped Emblem
