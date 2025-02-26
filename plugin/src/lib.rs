@@ -2,11 +2,12 @@
 
 use engage::{
     force::ForceType,
-    gamedata::{unit::{ Unit, Gender }, skill::SkillData},
+    gamedata::{unit::{ Unit, Gender }, skill::SkillData, PersonData},
     titlebar::TitleBar,
     gamesound::GameSound,
     mapmind::MapMind,
     menu::*,
+    mess::*,
     proc::{desc::ProcDesc, Bindable, ProcInst},
     sequence::{ mapsequence::{ MapSequenceEngageConfirm, MapSequenceEngageSummon, human::MapSequenceHuman },
     mapsequencetargetselect::{MapSequenceTargetSelect, MapTarget} },
@@ -25,6 +26,9 @@ use unity::{ prelude::*, system::List };
 
 mod enume;
 use enume::DisengageMapTargetEnumerator;
+
+const LABEL_SUMMON_UI: u32  = 0x35; // 53
+const LABEL_SUMMON_ACT: u32 = 0x36; // 54
 
 const SUMMON_MIND_TYPE: u32 = 0x32;    // Decimal: 50
 const DISENGAGE_MIND_TYPE: u32 = 0x38; // Decimal: 56
@@ -98,7 +102,7 @@ pub struct ProcVoidMethodMut<T: 'static + Bindable> {
     target: Option<&'static mut T>,
     // MethodInfo
     method: *const MethodInfo,
-    __: [u8; 0x38],
+    __: [u8; 0x39],
     delegates: *const u8,
     // ...
 }
@@ -225,9 +229,12 @@ pub fn main() {
         mapsequenceengagesummon_mindend_hook,
         mapsequenceengagesummon_combatsummon,
         mapsequenceengagesummon_simplesummon_hook,
-        mapsequenceengagesummon_commit,
+        mapsequenceengagesummon_commit_hook,
         ///////////////////////////
         mapsequenceengagesummon_createbind_hook,
+        mapsequenceengagesummon_createtelop_hook,
+        mapsequenceengagesummon_setperson_hook,
+        mapsequenceengagesummon_calculate_hook,
     );
 }
 
@@ -372,7 +379,7 @@ pub fn maptarget_enumerate(this: &mut MapTarget, mask: i32, _method_info: Option
         // This is using the new label added in the mapsequencehuman_createbind.
         this.enumerate_self_only(mask);
         let mapsequencehuman_instance = get_singleton_proc_instance::<MapSequenceHuman>().unwrap();
-        ProcInst::jump(mapsequencehuman_instance, 0x35);
+        ProcInst::jump(mapsequencehuman_instance, LABEL_SUMMON_UI.try_into().unwrap());
 
     } else if this.m_mind == REENGAGE_MIND_TYPE {
         println!("[maptarget_enumerate] reengage");
@@ -560,16 +567,38 @@ pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _meth
     call_original!(sup, is_resume, _method_info);
 
     let mut vec = unsafe { (*(sup.child)).descs.to_vec() };
-    let desc = engage::proc::desc::ProcDesc::jump(0x10);
+
+    //////////////////////////////////////////////////////
+    
+    // 0x10: 16::
+    //// OPEN SUMMON MENU
+    //// UnitCommand: 16 :: 0x10
+    // let desc = engage::proc::desc::ProcDesc::jump(0x10);
+    // EngageSummonMenu = 43 :: 0x2b
+    let desc = engage::proc::desc::ProcDesc::jump(0x2b);
     vec.insert(0x9a, desc);
 
-    // let method = mapsequencehuman_postitemmenutrade::get_ref();
-    // let method = unsafe { std::mem::transmute(method.method_ptr) };
-    // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    // vec.insert(0x9a, desc);
-    //////////////
+    let method = mapsummonmenu_createbindsummon::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
+    //////////////////////
+    let method = mapsequencehuman_unitmenuprepare::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
 
-    //// TRY DIRECT SUMMON
+    // public enum MapSequenceHuman.Label: entries, 53 is new. (0x35) LABEL_SUMMON_UI
+    let summon_ui_label = ProcDesc::label(53);
+    vec.insert(0x9a, summon_ui_label);
+
+    ////////////////////////////////////////////////
+    // ItemMenuEngageAttack:: 19 :: 0x13
+    // let desc = engage::proc::desc::ProcDesc::jump(0x13);
+    // UnitCommand = 16;
+    let desc = engage::proc::desc::ProcDesc::jump(0x10);
+    vec.insert(0x9a, desc);
+    
     // let method = mapsequenceengagesummon_mindend::get_ref();
     // let method = unsafe { std::mem::transmute(method.method_ptr) };
     // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
@@ -578,23 +607,39 @@ pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _meth
     // let method = unsafe { std::mem::transmute(method.method_ptr) };
     // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
     // vec.insert(0x9a, desc);
+    /////////////////////////////////////
+    let method = mapsequenceengagesummon_commit::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
     // let method = mapsequenceengagesummon_mindstart::get_ref();
     // let method = unsafe { std::mem::transmute(method.method_ptr) };
     // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
     // vec.insert(0x9a, desc);
+    let method = mapsequenceengagesummon_createbind::get_ref();
+    let method = unsafe { std::mem::transmute(method.method_ptr) };
+    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    vec.insert(0x9a, desc);
 
+    // LABEL_SUMMON_ACT
+    let summon_act_label = ProcDesc::label(54);
+    vec.insert(0x9a, summon_act_label);
+
+    ////////////////////////////////////////////////////////////////////////
+
+    // let mut vec = unsafe { (*(sup.child)).descs.to_vec() };
+    // let desc = engage::proc::desc::ProcDesc::jump(0x10);
+    // vec.insert(0x9a, desc);
+    // let method = mapsequencehuman_postitemmenutrade::get_ref();
+    // let method = unsafe { std::mem::transmute(method.method_ptr) };
+    // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
+    // vec.insert(0x9a, desc);
+    //////////////
     // let method = mapitemmenu_createbindtrade::get_ref();
     // let method = unsafe { std::mem::transmute(method.method_ptr) };
     // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
     // vec.insert(0x9a, desc);
     //////////////
-    // let method = mapsequenceengagesummon_createbind::get_ref();
-    //// OPEN SUMMON MENU
-    let method = mapsummonmenu_createbindsummon::get_ref();
-    let method = unsafe { std::mem::transmute(method.method_ptr) };
-    let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
-    vec.insert(0x9a, desc);
-
     // let method = mapsequencehuman_preitemmenutrade::get_ref();
     // let method = unsafe { std::mem::transmute(method.method_ptr) };
     // let desc = unsafe { ProcDesc::call(ProcVoidMethodMut::new(&mut (*sup.child), method)) };
@@ -606,9 +651,6 @@ pub fn mapsequencehuman_createbind(sup: &mut MapSequence, is_resume: bool, _meth
     // vec.insert(0x9a, desc);
     ///////////////////////////////////////////////////////////////////
 
-    // public enum MapSequenceHuman.Label: entries, 53 is new. (0x35)
-    let disengage_label = ProcDesc::label(53);
-    vec.insert(0x9a, disengage_label);
     let new_descs = Il2CppArray::from_slice(vec).unwrap();
     unsafe { (*sup.child).descs = new_descs };
     println!("[mapsequencehuman_createbind] END");
@@ -629,7 +671,7 @@ pub fn mapsequencetargetselect_decide(this: &mut MapSequenceTargetSelect, _metho
     println!("[mapsequencetargetselect_decide/BEG]");
     let maptarget_instance = get_instance::<MapTarget>();
     let cur_mind = maptarget_instance.m_mind;
-    if cur_mind == 0x38 {
+    if cur_mind == DISENGAGE_MIND_TYPE {
         println!("[mapsequencetargetselect_decide] DISENGAGE ({})", cur_mind);
         // let mapsequencehuman_instance = get_singleton_proc_instance::<MapSequenceHuman>().unwrap();
         // // This is using the new label added in the mapsequencehuman_createbind.
@@ -676,19 +718,23 @@ pub fn mapsequencetargetselect_decide_normal(this: &mut MapSequenceTargetSelect,
 
     let maptarget_instance = get_instance::<MapTarget>();
     let cur_mind = maptarget_instance.m_mind;
-    if cur_mind == 0x38 {
+    if cur_mind == DISENGAGE_MIND_TYPE {
         println!("[mapsequencetargetselect_decide_normal] STEAL/DISENGAGE ({})", cur_mind);
         let mapmind_instance = get_instance::<MapMind>();
-        // Start off empty I think? although this doesn't look like force.
-        let mut unit_index = 7;
-        if this.can_select_target() && this.target_data.is_some() {
-            unit_index = this.target_data.unwrap().m_unit.index;
-        }
-        mapmind_instance.set_trade_unit_index(unit_index as _);
+        //// Start off empty I think? although this doesn't look like force.
+        // let mut unit_index = 7;
+        // if this.can_select_target() && this.target_data.is_some() {
+        //     unit_index = this.target_data.unwrap().m_unit.index;
+        // }
+        // mapmind_instance.set_trade_unit_index(unit_index as _);
+        /////////////////////////////////////////
+        // mapmind_instance.set_unit()
+
+
         let mapsequencehuman_instance = get_singleton_proc_instance::<MapSequenceHuman>().unwrap();
         // This is using the new label added in the mapsequencehuman_createbind.
-        // 0x35: 53
-        ProcInst::jump(mapsequencehuman_instance, 0x35);
+        // 0x36: 54
+        ProcInst::jump(mapsequencehuman_instance, LABEL_SUMMON_ACT.try_into().unwrap());
         GameSound::post_event("Decide", None);
     } else {
         println!("[mapsequencetargetselect_decide_normal] mind: {}", cur_mind);
@@ -791,22 +837,23 @@ pub fn mapsequenceengagesummon_simplesummon_hook(this: &MapSequenceEngageSummon,
 // 0x71023cf940
 // void App.MapSequenceEngageSummon$$Commit(App_MapSequenceEngageSummon_o *__this,MethodInfo *method)
 #[skyline::hook(offset = 0x023cf940)]
-pub fn mapsequenceengagesummon_commit(this: &MapSequenceEngageSummon, _method_info: OptionalMethod) {
-    println!("[mapsequenceengagesummon_commit/BEG]");
+pub fn mapsequenceengagesummon_commit_hook(this: &MapSequenceEngageSummon, _method_info: OptionalMethod) {
+    println!("[mapsequenceengagesummon_commit_hook/BEG]");
     call_original!(this, _method_info);
-    println!("[mapsequenceengagesummon_commit/END]");
+    println!("[mapsequenceengagesummon_commit_hook/END]");
 }
 
-#[unity::from_offset("App", "MapSequenceEngageSummon", "CreateBind")]
-fn mapsequenceengagesummon_createbind(supper: &ProcInst, method_info: OptionalMethod);
 #[unity::from_offset("App", "MapSequenceEngageSummon", "SimpleSummon")]
 fn mapsequenceengagesummon_simplesummon(this: &MapSequenceEngageSummon, method_info: OptionalMethod);
 #[unity::from_offset("App", "MapSequenceEngageSummon", "MindStart")]
 fn mapsequenceengagesummon_mindstart(this: &MapSequenceEngageSummon, method_info: OptionalMethod);
 #[unity::from_offset("App", "MapSequenceEngageSummon", "MindEnd")]
 fn mapsequenceengagesummon_mindend(this: &MapSequenceEngageSummon, method_info: OptionalMethod);
-
-
+#[unity::from_offset("App", "MapSequenceEngageSummon", "Commit")]
+fn mapsequenceengagesummon_commit(this: &MapSequenceEngageSummon, method_info: OptionalMethod);
+#[unity::from_offset("App", "MapSequenceEngageSummon", "CreateBind")]
+fn mapsequenceengagesummon_createbind(supper: &ProcInst, method_info: OptionalMethod);
+///////////////////////////////////////////////////
 
 
 // 0x71023cfe10
@@ -818,3 +865,49 @@ pub fn mapsequenceengagesummon_createbind_hook(supper: &ProcInst, _method_info: 
     println!("[mapsequenceengagesummon_createbind_hook/END]");
 }
 
+// 0x71023cfd30
+// void App.MapSequenceEngageSummon$$CreateTelop(App_MapSequenceEngageSummon_o *__this,MethodInfo *method)
+#[skyline::hook(offset = 0x023cfd30)]
+pub fn mapsequenceengagesummon_createtelop_hook(this: &MapSequenceEngageSummon, _method_info: OptionalMethod) {
+    println!("[mapsequenceengagesummon_createtelop_hook/BEG]");
+    call_original!(this, _method_info);
+    println!("[mapsequenceengagesummon_createtelop_hook/END]");
+}
+
+// 0x71023cf360
+// void App.MapSequenceEngageSummon$$set_Person(App_MapSequenceEngageSummon_o *__this,App_PersonData_o *value,MethodInfo *method)
+#[skyline::hook(offset = 0x023cf360)]
+pub fn mapsequenceengagesummon_setperson_hook(this: &MapSequenceEngageSummon, value: Option<&PersonData>, _method_info: OptionalMethod) {
+    println!("[mapsequenceengagesummon_setPerson/BEG]");
+    call_original!(this, value, _method_info);
+    println!("[mapsequenceengagesummon_setPerson/END]");
+}
+
+// 0x71023cf640
+// void App.MapSequenceEngageSummon$$Calculate(App_MapSequenceEngageSummon_o *__this,MethodInfo *method)
+#[skyline::hook(offset = 0x023cf640)]
+pub fn mapsequenceengagesummon_calculate_hook(this: &MapSequenceEngageSummon, _method_info: OptionalMethod) {
+    println!("[mapsequenceengagesummon_calculate_hook/BEG]");
+    call_original!(this, _method_info);
+    println!("[mapsequenceengagesummon_calculate_hook/END]");
+}
+
+
+// 0x7101a0d650
+// void App.Unit$$CreateForSummonImpl1(App_Unit_o *__this,App_PersonData_o *person,App_Unit_o *original,int32_t rank, MethodInfo *method)
+#[skyline::hook(offset = 0x01a0d650)]
+pub fn unit_createforsummonimpl1(this: &Unit, person: Option<&PersonData>, original: Option<&Unit>, rank: i32, _method_info: OptionalMethod) {
+    println!("[unit_createforsummonimpl1/BEG]");
+    if let Some(person_unwrapped) = person {
+        if let Some(original_unwrapped) = original {
+            println!("[unit_createforsummonimpl1] person: {} original: {}", Mess::get(person_unwrapped.get_name().unwrap()).to_string(), original_unwrapped.get_pid());
+            call_original!(this, person, original, rank, _method_info);
+        } else {
+            println!("[unit_createforsummonimpl1] there is no original?");
+        }
+    } else {
+        println!("[unit_createforsummonimpl1] no person??? Is this a problem?");
+    }
+
+    println!("[unit_createforsummonimpl1/END]");
+}
